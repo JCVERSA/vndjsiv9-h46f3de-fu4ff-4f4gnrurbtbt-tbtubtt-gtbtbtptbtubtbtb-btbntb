@@ -1,0 +1,134 @@
+name: Minecraft Bedrock Host
+
+on:
+  workflow_dispatch:
+
+jobs:
+  minecraft-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      # ==========================================
+      # 1. FIX PLAYIT & MC : DOUBLE CACHE PERSISTANT
+      # ==========================================
+      - name: "Restauration du serveur et de la config Playit"
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/minecraft-server
+            /home/runner/.config/playit
+          key: mcb-server-v3-${{ github.run_id }}
+          restore-keys: mcb-server-v3-
+
+      # ==========================================
+      # 2. ENVIRONNEMENT GRAPHIQUE (RDP)
+      # ==========================================
+      - name: "Installer XFCE4 et XRDP"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xfce4 xfce4-goodies xrdp ufw unzip wget libcurl4
+          echo "xfce4-session" > ~/.xsession
+          sudo systemctl restart xrdp
+          echo "runner:${{ secrets.RDP_PASS }}" | sudo chpasswd
+
+      # ==========================================
+      # 3. CONFIGURATION AUTOMATIQUE DE PLAYIT
+      # ==========================================
+      - name: "Installer Playit.gg"
+        run: |
+          curl -SsL https://playit-cloud.github.io/ppa/key.gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/playit.gpg
+          echo "deb [signed-by=/etc/apt/trusted.gpg.d/playit.gpg] https://playit-cloud.github.io/ppa/data ./" | sudo tee /etc/apt/sources.list.d/playit.list
+          sudo apt-get update && sudo apt-get install playit -y
+          mkdir -p /home/runner/.config/playit
+
+      - name: "Téléchargement de Minecraft 1.19.50.02"
+        run: |
+          mkdir -p /home/runner/minecraft-server
+          cd /home/runner/minecraft-server
+          if [ ! -f "bedrock_server" ]; then
+            wget -q https://minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.50.02.zip
+            unzip -q bedrock-server-1.19.50.02.zip
+            rm bedrock-server-1.19.50.02.zip
+            chmod +x bedrock_server
+          fi
+
+      # ==========================================
+      # 4. SÉCURISATION VIA TAILSCALE (POUR TOI)
+      # ==========================================
+      - name: "Connexion Tailscale (Accès RDP)"
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+
+      # ==========================================
+      # 5. SYSTÈME DE COMMANDE PAR TUBE (FIFO)
+      # ==========================================
+      - name: "Préparer l'automatisation du serveur"
+        run: |
+          mkdir -p /home/runner/Desktop
+          cd /home/runner/minecraft-server
+          
+          # Création du tube de communication si inexistant
+          [ -p mcb.fifo ] || mkfifo mcb.fifo
+
+          # 1. Raccourci pour lancer le serveur via le tube
+          cat << 'EOF' > /home/runner/Desktop/Lancer_Serveur.sh
+          #!/bin/bash
+          cd /home/runner/minecraft-server
+          export LD_LIBRARY_PATH=.
+          clear
+          echo "================================================="
+          echo "      SERVEUR EN LIGNE (CONTRÔLÉ PAR LE CLOUD)  "
+          echo "================================================="
+          # Maintient le tube ouvert et lance le serveur avec les entrées redirigées
+          tail -f mcb.fifo | ./bedrock_server
+          EOF
+          chmod +x /home/runner/Desktop/Lancer_Serveur.sh
+
+          # 2. Raccourci Bureau pour Sauvegarder et Quitter manuellement
+          cat << 'EOF' > /home/runner/Desktop/Sauvegarder_et_Quitter.sh
+          #!/bin/bash
+          echo "Envoi de la commande d'arrêt au serveur..."
+          echo "stop" > /home/runner/minecraft-server/mcb.fifo
+          touch /home/runner/minecraft-server/stop.txt
+          EOF
+          chmod +x /home/runner/Desktop/Sauvegarder_et_Quitter.sh
+
+      # ==========================================
+      # 6. SURVEILLANCE AUTOMATIQUE (TIMEOUT INTÉLIGENT)
+      # ==========================================
+      - name: "Gestion de la Session et Auto-Sauvegarde"
+        run: |
+          rm -f /home/runner/minecraft-server/stop.txt
+          
+          echo "================================================="
+          echo "  HÔTE MINECRAFT EN LIGNE AVEC PROTECTION ANTI-CRASH"
+          echo "================================================="
+          
+          # Configuration du temps maximum en secondes (5h30 = 19800 secondes)
+          MAX_TIME=19800
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $MAX_TIME ]; do
+            # Si l'utilisateur a cliqué sur "Sauvegarder et Quitter"
+            if [ -f /home/runner/minecraft-server/stop.txt ]; then
+              echo "Arrêt manuel détecté via le bouton du bureau."
+              break
+            fi
+            
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
+          done
+
+          # Si on arrive ici à cause du temps écoulé (5h30)
+          if [ $ELAPSED -ge $MAX_TIME ]; then
+            echo "⚠️ Alerte : Sécurité des 5h30 atteinte ! Sauvegarde automatique en cours..."
+            echo "stop" > /home/runner/minecraft-server/mcb.fifo
+            sleep 15
+          fi
+
+          echo "Le serveur est arrêté proprement. Compression et envoi vers le cache GitHub..."
