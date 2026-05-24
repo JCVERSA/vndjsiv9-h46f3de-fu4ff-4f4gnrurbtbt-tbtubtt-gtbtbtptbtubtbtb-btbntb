@@ -1,4 +1,4 @@
-name: Minecraft Bedrock Host
+name: Minecraft Bedrock Cloud Host + SFTP Secure
 
 on:
   workflow_dispatch:
@@ -13,122 +13,154 @@ jobs:
         uses: actions/checkout@v4
 
       # ==========================================
-      # 1. FIX PLAYIT & MC : DOUBLE CACHE PERSISTANT
+      # 1. RESTAURATION COMPLÈTE DU CACHE
       # ==========================================
-      - name: "Restauration du serveur et de la config Playit"
+      - name: "Restauration du serveur et de Playit"
         uses: actions/cache@v4
         with:
           path: |
             /home/runner/minecraft-server
             /home/runner/.config/playit
-          key: mcb-server-v3-${{ github.run_id }}
-          restore-keys: mcb-server-v3-
+          key: mcb-cloud-v6-${{ github.run_id }}
+          restore-keys: mcb-cloud-v6-
 
       # ==========================================
-      # 2. ENVIRONNEMENT GRAPHIQUE (RDP)
+      # 2. INSTALLATION DES DÉPENDANCES ET DE SSH (SFTP)
       # ==========================================
-      - name: "Installer XFCE4 et XRDP"
+      - name: "Installer les paquets et le serveur SFTP"
         run: |
           sudo apt-get update
-          sudo apt-get install -y xfce4 xfce4-goodies xrdp ufw unzip wget libcurl4
-          echo "xfce4-session" > ~/.xsession
-          sudo systemctl restart xrdp
-          echo "runner:${{ secrets.RDP_PASS }}" | sudo chpasswd
+          sudo apt-get install -y unzip wget libcurl4 curl gnupg openssh-server
+          echo "runner:${{ secrets.SFTP_PASS }}" | sudo chpasswd
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
 
       # ==========================================
-      # 3. CONFIGURATION AUTOMATIQUE DE PLAYIT
+      # 3. CONNEXION SÉCURISÉE VIA TAILSCALE
       # ==========================================
-      - name: "Installer Playit.gg"
+      - name: "Connexion Tailscale (Accès SFTP Privé)"
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+
+      # ==========================================
+      # 4. CONFIGURATION AUTOMATIQUE DE PLAYIT
+      # ==========================================
+      - name: "Installer et configurer Playit.gg"
         run: |
           curl -SsL https://playit-cloud.github.io/ppa/key.gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/playit.gpg
           echo "deb [signed-by=/etc/apt/trusted.gpg.d/playit.gpg] https://playit-cloud.github.io/ppa/data ./" | sudo tee /etc/apt/sources.list.d/playit.list
           sudo apt-get update && sudo apt-get install playit -y
           mkdir -p /home/runner/.config/playit
 
-      - name: "Téléchargement de Minecraft 1.19.50.02"
+      # ==========================================
+      # 5. PRÉPARATION ET INJECTION DES CONFIGURATIONS
+      # ==========================================
+      - name: "Vérification et initialisation de Minecraft"
         run: |
           mkdir -p /home/runner/minecraft-server
           cd /home/runner/minecraft-server
+
           if [ ! -f "bedrock_server" ]; then
+            echo "📥 Téléchargement initial de la version 1.19.50.02..."
             wget -q https://minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.50.02.zip
             unzip -q bedrock-server-1.19.50.02.zip
             rm bedrock-server-1.19.50.02.zip
             chmod +x bedrock_server
           fi
 
-      # ==========================================
-      # 4. SÉCURISATION VIA TAILSCALE (POUR TOI)
-      # ==========================================
-      - name: "Connexion Tailscale (Accès RDP)"
-        uses: tailscale/github-action@v2
-        with:
-          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          # 👑 Injection automatique des permissions Admin
+          cat << 'EOF' > permissions.json
+          [
+            {
+              "permissionLevel": "operator",
+              "xuid": "2535408392300798"
+            }
+          ]
+          EOF
+
+          # ⚙️ Injection automatique de tes server.properties personnalisés
+          cat << 'EOF' > server.properties
+          server-name=Dedicated Server
+          gamemode=survival
+          force-gamemode=false
+          difficulty=easy
+          allow-cheats=true
+          max-players=30
+          online-mode=false
+          allow-list=false
+          server-port=19132
+          server-portv6=19133
+          enable-lan-visibility=true
+          view-distance=8
+          tick-distance=4
+          player-idle-timeout=30
+          max-threads=8
+          level-name=Bedrock level
+          level-seed=network
+          default-player-permission-level=member
+          texturepack-required=false
+          content-log-file-enabled=false
+          compression-threshold=1
+          compression-algorithm=zlib
+          server-authoritative-movement=server-auth
+          player-movement-score-threshold=20
+          player-movement-action-direction-threshold=0.85
+          player-movement-distance-threshold=0.3
+          player-movement-duration-threshold-in-ms=500
+          correct-player-movement=false
+          server-authoritative-block-breaking=false
+          chat-restriction=None
+          disable-player-interaction=false
+          client-side-chunk-generation-enabled=true
+          EOF
 
       # ==========================================
-      # 5. SYSTÈME DE COMMANDE PAR TUBE (FIFO)
+      # 6. DÉMARRAGE ET SURVEILLANCE INTELLIGENTE
       # ==========================================
-      - name: "Préparer l'automatisation du serveur"
+      - name: "Lancement du serveur & Monitoring en direct"
         run: |
-          mkdir -p /home/runner/Desktop
-          cd /home/runner/minecraft-server
-          
-          # Création du tube de communication si inexistant
-          [ -p mcb.fifo ] || mkfifo mcb.fifo
+          sudo systemctl start playit
+          sleep 4
 
-          # 1. Raccourci pour lancer le serveur via le tube
-          cat << 'EOF' > /home/runner/Desktop/Lancer_Serveur.sh
-          #!/bin/bash
           cd /home/runner/minecraft-server
           export LD_LIBRARY_PATH=.
-          clear
-          echo "================================================="
-          echo "      SERVEUR EN LIGNE (CONTRÔLÉ PAR LE CLOUD)  "
-          echo "================================================="
-          # Maintient le tube ouvert et lance le serveur avec les entrées redirigées
-          tail -f mcb.fifo | ./bedrock_server
-          EOF
-          chmod +x /home/runner/Desktop/Lancer_Serveur.sh
 
-          # 2. Raccourci Bureau pour Sauvegarder et Quitter manuellement
-          cat << 'EOF' > /home/runner/Desktop/Sauvegarder_et_Quitter.sh
-          #!/bin/bash
-          echo "Envoi de la commande d'arrêt au serveur..."
-          echo "stop" > /home/runner/minecraft-server/mcb.fifo
-          touch /home/runner/minecraft-server/stop.txt
-          EOF
-          chmod +x /home/runner/Desktop/Sauvegarder_et_Quitter.sh
+          # S'assurer qu'aucun vieux fichier stop ne traîne au démarrage
+          rm -f stop.txt
 
-      # ==========================================
-      # 6. SURVEILLANCE AUTOMATIQUE (TIMEOUT INTÉLIGENT)
-      # ==========================================
-      - name: "Gestion de la Session et Auto-Sauvegarde"
-        run: |
-          rm -f /home/runner/minecraft-server/stop.txt
-          
-          echo "================================================="
-          echo "  HÔTE MINECRAFT EN LIGNE AVEC PROTECTION ANTI-CRASH"
-          echo "================================================="
-          
-          # Configuration du temps maximum en secondes (5h30 = 19800 secondes)
+          [ -p mcb.fifo ] || mkfifo mcb.fifo
+          ./bedrock_server < mcb.fifo &
+          MC_PID=$!
+          exec 3>mcb.fifo
+
+          echo "🚀 Serveur Minecraft Bedrock en ligne avec tes configurations !"
+          echo "🔒 Pour l'éteindre et TOUT sauvegarder à 100% : Crée un fichier 'stop.txt' dans ce dossier via SFTP."
+
+          # Boucle de surveillance (5h30 max)
           MAX_TIME=19800
           ELAPSED=0
-
-          while [ $ELAPSED -lt $MAX_TIME ]; do
-            # Si l'utilisateur a cliqué sur "Sauvegarder et Quitter"
-            if [ -f /home/runner/minecraft-server/stop.txt ]; then
-              echo "Arrêt manuel détecté via le bouton du bureau."
+          
+          while kill -0 $MC_PID 2>/dev/null; do
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+            
+            # Détection de l'arrêt demandé par SFTP
+            if [ -f "/home/runner/minecraft-server/stop.txt" ]; then
+              echo "🛑 [SFTP] Fichier stop.txt détecté ! Arrêt propre du serveur en cours..."
+              echo "stop" > mcb.fifo
+              rm -f "/home/runner/minecraft-server/stop.txt"
+              wait $MC_PID
+              echo "✅ Serveur arrêté avec succès. Passage à la mise en cache..."
               break
             fi
-            
-            sleep 10
-            ELAPSED=$((ELAPSED + 10))
+
+            # Sécurité temps max
+            if [ $ELAPSED -ge $MAX_TIME ]; then
+              echo "⚠️ Sécurité des 5h30 atteinte. Fermeture automatique..."
+              echo "stop" > mcb.fifo
+              wait $MC_PID
+              break
+            fi
           done
-
-          # Si on arrive ici à cause du temps écoulé (5h30)
-          if [ $ELAPSED -ge $MAX_TIME ]; then
-            echo "⚠️ Alerte : Sécurité des 5h30 atteinte ! Sauvegarde automatique en cours..."
-            echo "stop" > /home/runner/minecraft-server/mcb.fifo
-            sleep 15
-          fi
-
-          echo "Le serveur est arrêté proprement. Compression et envoi vers le cache GitHub..."
