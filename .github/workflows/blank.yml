@@ -123,21 +123,23 @@ jobs:
           client-side-chunk-generation-enabled=true
           EOF
 
-      # ==========================================
+# ==========================================
       # 6. DÉMARRAGE ET SURVEILLANCE INTELLIGENTE
       # ==========================================
       - name: "Lancement du serveur & Monitoring en direct"
+        env:
+          SECURE_SSH_PASS: ${{ secrets.SFTP_PASS }}
         run: |
           sudo systemctl start playit
           sleep 4
 
-          # 🔥 DÉMARRAGE DE L'INTERFACE SSH WEBSOCKET (Port 7681)
-          # Sécurisé par le combo [Identifiants obligatoires + protection Tailscale]
-          ttyd -p 7681 -c runner:${{ secrets.SFTP_PASS }} bash &
+          # 🔥 CORRECTION : Utilisation de la variable d'environnement + liaison explicite à toutes les interfaces
+          # Les logs sont envoyés dans ttyd.log pour vérification en cas de pépin
+          ttyd -i 0.0.0.0 -p 7681 -c "runner:$SECURE_SSH_PASS" bash > ttyd.log 2>&1 &
           
           echo "========================================================="
           echo "🌐 SSH WEB-SOCKET ACTIF ! Accessible dans ton navigateur à :"
-          echo "👉 http://<TON_IP_TAILSCALE>:7681"
+          echo "👉 http://100.125.123.30:7681"
           echo "========================================================="
 
           cd /home/runner/minecraft-server
