@@ -1,4 +1,4 @@
-name: Minecraft Bedrock Cloud Host + SFTP Secure
+name: Minecraft Bedrock Cloud Host + SFTP & WebSSH
 
 on:
   workflow_dispatch:
@@ -21,16 +21,18 @@ jobs:
           path: |
             /home/runner/minecraft-server
             /home/runner/.config/playit
-          key: mcb-cloud-v6-${{ github.run_id }}
-          restore-keys: mcb-cloud-v6-
+          key: mcb-cloud-v7-${{ github.run_id }}
+          restore-keys: mcb-cloud-v7-
 
       # ==========================================
-      # 2. INSTALLATION DES DÉPENDANCES ET DE SSH (SFTP)
+      # 2. INSTALLATION DES DÉPENDANCES, SSH ET SSH-WEBSOCKET (TTYD)
       # ==========================================
-      - name: "Installer les paquets et le serveur SFTP"
+      - name: "Installer les paquets, SSH et WebSSH"
         run: |
           sudo apt-get update
-          sudo apt-get install -y unzip wget libcurl4 curl gnupg openssh-server
+          sudo apt-get install -y unzip wget libcurl4 curl gnupg openssh-server ttyd
+          
+          # Configuration du compte utilisateur 'runner'
           echo "runner:${{ secrets.SFTP_PASS }}" | sudo chpasswd
           sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
@@ -39,20 +41,25 @@ jobs:
       # ==========================================
       # 3. CONNEXION SÉCURISÉE VIA TAILSCALE
       # ==========================================
-      - name: "Connexion Tailscale (Accès SFTP Privé)"
+      - name: "Connexion Tailscale (Accès Privé Sécurisé)"
         uses: tailscale/github-action@v2
         with:
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
       # ==========================================
-      # 4. CONFIGURATION AUTOMATIQUE DE PLAYIT
+      # 4. CONFIGURATION AUTOMATIQUE DE PLAYIT (IP FIXE)
       # ==========================================
       - name: "Installer et configurer Playit.gg"
         run: |
           curl -SsL https://playit-cloud.github.io/ppa/key.gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/playit.gpg
           echo "deb [signed-by=/etc/apt/trusted.gpg.d/playit.gpg] https://playit-cloud.github.io/ppa/data ./" | sudo tee /etc/apt/sources.list.d/playit.list
           sudo apt-get update && sudo apt-get install playit -y
-          mkdir -p /home/runner/.config/playit
+          
+          sudo mkdir -p /etc/playit
+          if [ -f "/home/runner/.config/playit/playit.toml" ]; then
+            sudo cp /home/runner/.config/playit/playit.toml /etc/playit/playit.toml
+            echo "✅ Configuration Playit (IP Fixe) restaurée !"
+          fi
 
       # ==========================================
       # 5. PRÉPARATION ET INJECTION DES CONFIGURATIONS
@@ -70,7 +77,7 @@ jobs:
             chmod +x bedrock_server
           fi
 
-          # 👑 Injection automatique des permissions Admin
+          # Injection automatique des permissions Admin
           cat << 'EOF' > permissions.json
           [
             {
@@ -80,7 +87,7 @@ jobs:
           ]
           EOF
 
-          # ⚙️ Injection automatique de tes server.properties personnalisés
+          # Injection automatique de tes server.properties
           cat << 'EOF' > server.properties
           server-name=Dedicated Server
           gamemode=survival
@@ -124,19 +131,23 @@ jobs:
           sudo systemctl start playit
           sleep 4
 
+          # 🔥 DÉMARRAGE DE L'INTERFACE SSH WEBSOCKET (Port 7681)
+          # Sécurisé par le combo [Identifiants obligatoires + protection Tailscale]
+          ttyd -p 7681 -c runner:${{ secrets.SFTP_PASS }} bash &
+          
+          echo "========================================================="
+          echo "🌐 SSH WEB-SOCKET ACTIF ! Accessible dans ton navigateur à :"
+          echo "👉 http://<TON_IP_TAILSCALE>:7681"
+          echo "========================================================="
+
           cd /home/runner/minecraft-server
           export LD_LIBRARY_PATH=.
-
-          # S'assurer qu'aucun vieux fichier stop ne traîne au démarrage
           rm -f stop.txt
 
           [ -p mcb.fifo ] || mkfifo mcb.fifo
           ./bedrock_server < mcb.fifo &
           MC_PID=$!
           exec 3>mcb.fifo
-
-          echo "🚀 Serveur Minecraft Bedrock en ligne avec tes configurations !"
-          echo "🔒 Pour l'éteindre et TOUT sauvegarder à 100% : Crée un fichier 'stop.txt' dans ce dossier via SFTP."
 
           # Boucle de surveillance (5h30 max)
           MAX_TIME=19800
@@ -146,21 +157,31 @@ jobs:
             sleep 5
             ELAPSED=$((ELAPSED + 5))
             
-            # Détection de l'arrêt demandé par SFTP
             if [ -f "/home/runner/minecraft-server/stop.txt" ]; then
-              echo "🛑 [SFTP] Fichier stop.txt détecté ! Arrêt propre du serveur en cours..."
+              echo "🛑 [SFTP] Fichier stop.txt détecté ! Arrêt propre..."
               echo "stop" > mcb.fifo
               rm -f "/home/runner/minecraft-server/stop.txt"
               wait $MC_PID
-              echo "✅ Serveur arrêté avec succès. Passage à la mise en cache..."
+              
+              # Sauvegarde de l'identité Playit
+              mkdir -p /home/runner/.config/playit
+              if [ -f "/etc/playit/playit.toml" ]; then
+                sudo cp /etc/playit/playit.toml /home/runner/.config/playit/playit.toml
+                sudo chown runner:runner /home/runner/.config/playit/playit.toml
+              fi
               break
             fi
 
-            # Sécurité temps max
             if [ $ELAPSED -ge $MAX_TIME ]; then
               echo "⚠️ Sécurité des 5h30 atteinte. Fermeture automatique..."
               echo "stop" > mcb.fifo
               wait $MC_PID
+              
+              mkdir -p /home/runner/.config/playit
+              if [ -f "/etc/playit/playit.toml" ]; then
+                sudo cp /etc/playit/playit.toml /home/runner/.config/playit/playit.toml
+                sudo chown runner:runner /home/runner/.config/playit/playit.toml
+              fi
               break
             fi
           done
