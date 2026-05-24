@@ -21,8 +21,8 @@ jobs:
           path: |
             /home/runner/minecraft-server
             /home/runner/.config/playit
-          key: mcb-cloud-v7-${{ github.run_id }}
-          restore-keys: mcb-cloud-v7-
+          key: mcb-cloud-v8-${{ github.run_id }}
+          restore-keys: mcb-cloud-v8-
 
       # ==========================================
       # 2. INSTALLATION DES DÉPENDANCES, SSH ET SSH-WEBSOCKET (TTYD)
@@ -32,7 +32,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y unzip wget libcurl4 curl gnupg openssh-server ttyd
           
-          # Configuration du compte utilisateur 'runner'
           echo "runner:${{ secrets.SFTP_PASS }}" | sudo chpasswd
           sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
@@ -55,10 +54,15 @@ jobs:
           echo "deb [signed-by=/etc/apt/trusted.gpg.d/playit.gpg] https://playit-cloud.github.io/ppa/data ./" | sudo tee /etc/apt/sources.list.d/playit.list
           sudo apt-get update && sudo apt-get install playit -y
           
+          # 🛑 CORRECTION 1 : On coupe immédiatement le Playit "vide" lancé par apt
+          sudo systemctl stop playit || true
+          
           sudo mkdir -p /etc/playit
           if [ -f "/home/runner/.config/playit/playit.toml" ]; then
             sudo cp /home/runner/.config/playit/playit.toml /etc/playit/playit.toml
-            echo "✅ Configuration Playit (IP Fixe) restaurée !"
+            echo "✅ Configuration Playit (IP Fixe) injectée avec succès dans le système !"
+          else
+            echo "ℹ️ Première session ou cache vide : un nouveau tunnel va être créé."
           fi
 
       # ==========================================
@@ -77,7 +81,6 @@ jobs:
             chmod +x bedrock_server
           fi
 
-          # Injection automatique des permissions Admin
           cat << 'EOF' > permissions.json
           [
             {
@@ -87,7 +90,6 @@ jobs:
           ]
           EOF
 
-          # Injection automatique de tes server.properties
           cat << 'EOF' > server.properties
           server-name=Dedicated Server
           gamemode=survival
@@ -123,24 +125,29 @@ jobs:
           client-side-chunk-generation-enabled=true
           EOF
 
-# ==========================================
+      # ==========================================
       # 6. DÉMARRAGE ET SURVEILLANCE INTELLIGENTE
       # ==========================================
       - name: "Lancement du serveur & Monitoring en direct"
         env:
           SECURE_SSH_PASS: ${{ secrets.SFTP_PASS }}
         run: |
-          sudo systemctl start playit
-          sleep 4
+          # 🔄 CORRECTION 2 : On RESTART au lieu de START pour forcer la lecture du fichier injecté
+          sudo systemctl restart playit
+          sleep 5
 
-          # 🔥 CORRECTION : Utilisation de la variable d'environnement + liaison explicite à toutes les interfaces
-          # Les logs sont envoyés dans ttyd.log pour vérification en cas de pépin
           ttyd -i 0.0.0.0 -p 7681 -c "runner:$SECURE_SSH_PASS" bash > ttyd.log 2>&1 &
           
           echo "========================================================="
-          echo "🌐 SSH WEB-SOCKET ACTIF ! Accessible dans ton navigateur à :"
-          echo "👉 http://100.125.123.30:7681"
+          echo "🌐 SSH WEB-SOCKET ACTIF !"
           echo "========================================================="
+
+          # Affichage du lien si c'est une première configuration
+          if [ ! -f "/home/runner/.config/playit/playit.toml" ]; then
+            echo "🔗 CLIQUE SUR CE LIEN POUR ASSOCIER TON COMPTE PLAYIT :"
+            sudo journalctl -u playit --no-pager | grep -o 'https://playit.gg/claim/[^ ]*' || echo "Lien dispo sur playit.gg"
+            echo "========================================================="
+          fi
 
           cd /home/runner/minecraft-server
           export LD_LIBRARY_PATH=.
@@ -165,7 +172,8 @@ jobs:
               rm -f "/home/runner/minecraft-server/stop.txt"
               wait $MC_PID
               
-              # Sauvegarde de l'identité Playit
+              # 🔥 SAUVEGARDE STRICTE DE L'IP
+              echo "💾 Sauvegarde de l'identité Playit dans le cache..."
               mkdir -p /home/runner/.config/playit
               if [ -f "/etc/playit/playit.toml" ]; then
                 sudo cp /etc/playit/playit.toml /home/runner/.config/playit/playit.toml
@@ -175,7 +183,7 @@ jobs:
             fi
 
             if [ $ELAPSED -ge $MAX_TIME ]; then
-              echo "⚠️ Sécurité des 5h30 atteinte. Fermeture automatique..."
+              echo "⚠️ Sécurité atteinte. Fermeture automatique..."
               echo "stop" > mcb.fifo
               wait $MC_PID
               
