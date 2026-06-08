@@ -15,8 +15,9 @@ jobs:
       # ==========================================
       # 1. RESTAURATION GLOBALE DE L'ENVIRONNEMENT
       # ==========================================
-      - name: "Restauration globale du Workspace (Système & Données)"
-        uses: actions/cache@v4
+      - name: "Restauration du Workspace (Système & Données)"
+        id: cache-workspace
+        uses: actions/cache/restore@v4
         with:
           path: |
             /home/runner
@@ -26,7 +27,6 @@ jobs:
           key: linux-workspace-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             linux-workspace-
-          save-always: true
 
       # ==========================================
       # 2. VÉRIFICATION / CONFIGURATION DES ACCÈS
@@ -54,7 +54,7 @@ jobs:
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
       # ==========================================
-      # 4. EXÉCUTION & MAINTIEN DE LA SESSION de DEV
+      # 4. EXÉCUTION & MAINTIEN DE LA SESSION DE DEV
       # ==========================================
       - name: "Lancement du Workspace & Monitoring"
         env:
@@ -64,7 +64,7 @@ jobs:
           ttyd -i 0.0.0.0 -p 7681 -c "runner:$SECURE_SSH_PASS" bash > /home/runner/ttyd.log 2>&1 &
           
           echo "========================================================="
-          Write-Host "🌐 WORKSPACE LINUX ACTIF & SÉCURISÉ" -ForegroundColor Green
+          echo "🌐 WORKSPACE LINUX ACTIF & SÉCURISÉ"
           echo "========================================================="
           echo "Accès WebSSH : Disponible via ton IP Tailscale sur le port 7681"
           echo "Accès SFTP/SSH : Utilisateur 'runner' avec ton SFTP_PASS"
@@ -100,12 +100,25 @@ jobs:
           done
 
       # ==========================================
-      # 5. NETTOYAGE DES PROCESSUS AVANT CACHE
+      # 5. NETTOYAGE DES PROCESSUS AVANT SAUVEGARDE
       # ==========================================
       - name: "Libération des processus pour éviter les verrous de fichiers"
         if: always()
         run: |
-          echo "Arrêt des outils en arrière-plan pour sauvegarder proprement..."
+          echo "Arrêt des outils en arrière-plan..."
           sudo killall ttyd || true
           rm -f /home/runner/keepalive.txt
-          echo "Fichiers prêts pour la compression du cache globale."
+
+      # ==========================================
+      # 6. SAUVEGARDE STRICTE ET POST-JOB DU CACHE
+      # ==========================================
+      - name: "Sauvegarde du Workspace (Système & Données)"
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /home/runner
+            /usr/local
+            /var/cache/apt/archives
+            /var/lib/apt/lists
+          key: linux-workspace-${{ github.run_id }}-${{ github.run_attempt }}
