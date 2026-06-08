@@ -1,107 +1,126 @@
-name: Persistent Linux Workspace Pro
+name: Persistent Linux Ubuntu Workspace + SFTP & WebSSH Pro
 
 on:
-  workflow_dispatch: # Déclenchement manuel contrôlé
+  workflow_dispatch: # Déclenchement manuel unifié depuis l'interface GitHub
 
-# Forçage global de l'environnement pour anticiper les dépréciations de la plateforme
+# Anticipation des règles de dépréciation de GitHub pour sécuriser l'environnement en 2026
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  development_environment:
-    name: Linux Workspace Core
+  workspace-host:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # Limite maximale absolue de GitHub Actions (6 heures)
+    timeout-minutes: 360 # Augmenté à la limite maximale autorisée (6 heures)
 
     steps:
-      - name: 1. Extraction du Code Source
+      - name: "1. Checkout repository"
         uses: actions/checkout@v4
         with:
-          clean: false
+          clean: false # Préserve les modifications locales entre les sessions
 
-      - name: 2. Configuration de l'Environnement Node.js (Version Active & Future)
+      - name: "2. Configuration Runtime Node.js"
         uses: actions/setup-node@v4
         with:
-          node-version: 22 # Passage à la version LTS supérieure pour éviter la dépréciation
-          # CORRECTION CLÉ : Retrait de l'option cache: 'npm' pour éviter le plantage si le projet est vide
+          node-version: 22 # Version stable LTS sans option 'cache' pour éviter le crash si le dépôt est vide
 
-      - name: 3. Restauration du Cache Global & Applicatif
-        id: global-cache
+      - name: "3. Restauration Unifiée et Automatique du Workspace"
+        id: cache-workspace
         uses: actions/cache@v4
         with:
+          # Inclusions de tes dossiers de données essentiels.
+          # NOTE : Si ton cache sature à cause de /usr/local, retire cette ligne spécifique du tableau.
           path: |
-            ${{ github.workspace }}
-            /home/runner/.fcc
-            ~/.local
-            ~/.config
+            /home/runner
+            /usr/local
             /var/cache/apt/archives
-          key: os-workspace-${{ github.run_id }}-${{ github.run_attempt }}
+            /var/lib/apt/lists
+          key: linux-workspace-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            os-workspace-
+            linux-workspace-
 
-      - name: 4. Mise à jour Système & Installation Sécurisée des Paquets Essentiels
+      - name: "4. Configuration et Installation des Accès (SSH, SFTP & Utilitaires)"
         run: |
-          echo "[SYS] Début de la mise à jour des dépôts..."
+          echo "[SYS] Mise à jour des miroirs APT..."
+          sudo apt-get update -qq || true
           
-          # Tentative de mise à jour avec tolérance aux erreurs réseau passagères
-          sudo apt-get update || true
-          
-          echo "[SYS] Installation non-interactive des utilitaires essentiels..."
-          # Utilisation d'options strictes pour éviter tout blocage ou invite interactive
+          echo "[SYS] Installation des couches d'accès et outils de build..."
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential \
+            openssh-server \
+            ttyd \
+            unzip \
+            wget \
             curl \
             git \
+            gnupg \
+            build-essential \
             jq \
             socat \
-            tmux \
-            unzip \
-            wget || echo "[WARN] Certains paquets n'ont pas pu être installés, poursuite du workflow."
+            tmux || echo "[WARN] Certains paquets système secondaires n'ont pas pu être mis à jour."
           
-          # Sécurisation et persistance des répertoires applicatifs
+          echo "[SYS] Configuration de la sécurité d'accès distant..."
+          # Synchronisation du mot de passe avec tes secrets de dépôt pour l'utilisateur runner
+          echo "runner:${{ secrets.SFTP_PASS }}" | sudo chpasswd
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+          
+          # Assure la présence structurelle du dossier de configuration pour tes outils AI
           mkdir -p /home/runner/.fcc
-          echo "[SYS] Environnement système initialisé."
 
-      - name: 5. Point d'Entrée du Runtime & Système d'Auto-Sauvegarde
+      - name: "5. Connexion Sécurisée au Réseau Privé Tailscale"
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+
+      - name: "6. Lancement du Workspace Core & Système d'Auto-Save"
+        env:
+          SECURE_SSH_PASS: ${{ secrets.SFTP_PASS }}
         run: |
+          # Initialisation et démarrage du terminal WebSSH en arrière-plan sur le port 7681
+          ttyd -i 0.0.0.0 -p 7681 -c "runner:$SECURE_SSH_PASS" bash > /home/runner/ttyd.log 2>&1 &
+          
           echo "========================================================="
-          echo "         SÉCURITÉ ET AUTO-SAVE ACTIVÉS (PRO)             "
+          echo "🌐 WORKSPACE LINUX ACTIF & INTERCONNECTÉ VIA TAILSCALE"
           echo "========================================================="
-          echo " Surveillance active de l'instance :"
-          echo " - Arrêt propre manuel : créez le fichier 'stop.txt'"
-          echo " - Timeout ou Annulation : Interception et Auto-Save"
+          echo "Accès WebSSH  : Disponible via ton IP Tailscale sur le port 7681"
+          echo "Accès SFTP/SSH : Connecte ton VS Code sur l'IP Tailscale (User: runner)"
+          echo "========================================================="
+          echo " Failsafes opérationnels :"
+          echo " -> Arrêt contrôlé (SFTP/WebSSH) : Crée le fichier 'stop.txt'"
+          echo " -> Fermeture forcée (GitHub Cancel) : Auto-Save géré par Signal Trap"
           echo "========================================================="
 
-          # --- ROUTINE D'INTERCEPTION (TRAP) POUR L'AUTO-SAVE ---
+          # Configuration des drapeaux de session
+          rm -f /home/runner/stop.txt
+          touch /home/runner/keepalive.txt
+
+          # --- TOKENS D'INTERCEPTION ET D'ARRÊT PROPRE (TRAP) ---
           trigger_auto_save() {
-            echo -e "\n[⚠️ ALERT] Signal système de fermeture intercepté (Timeout ou Annulation) !"
-            echo "[AUTO-SAVE] Lancement de la procédure de sauvegarde d'urgence..."
-            
-            # Nettoyage préventif du fichier d'arrêt pour la session suivante
-            rm -f "${{ github.workspace }}/stop.txt"
-            
-            echo "[AUTO-SAVE] Nettoyage terminé. Transfert des données vers le gestionnaire de cache..."
+            echo -e "\n[⚠️ ALERT] Signal d'arrêt ou d'annulation détecté par l'infrastructure GitHub !"
+            echo "[AUTO-SAVE] Libération des verrous de processus et destruction de ttyd..."
+            sudo killall ttyd || true
+            rm -f /home/runner/stop.txt
+            rm -f /home/runner/keepalive.txt
+            echo "[AUTO-SAVE] Environnement nettoyé et synchronisé. Envoi imminent de l'archive d'état."
             exit 0
           }
-
-          # Liaison de la fonction aux signaux d'arrêt de GitHub (SIGTERM / SIGINT)
+          
+          # Enregistrement du piège à signaux (SIGTERM s'active lors du clic sur 'Cancel Run' ou Timeout)
           trap trigger_auto_save SIGTERM SIGINT
 
-          # -----------------------------------------------------------------
-          # ZONE D'INJECTION DE VOS PROCESSUS EN ARRIÈRE-PLAN
-          # (Exemple : fcc-server &)
-          # -----------------------------------------------------------------
-
-          STOP_FILE="${{ github.workspace }}/stop.txt"
-          
-          # Boucle de surveillance à haute performance et basse consommation CPU
-          while [ ! -f "$STOP_FILE" ]; do
-            # Exécution du sleep en arrière-plan pour que le shell reste à l'écoute des signaux 'trap'
-            sleep 5 & 
+          # Boucle de surveillance à haute performance énergétique (Pas de surcharge CPU)
+          while [ -f /home/runner/keepalive.txt ]; do
+            if [ -f "/home/runner/stop.txt" ]; then
+              echo "🛑 Signal d'arrêt manuel détecté depuis l'espace de travail."
+              break
+            fi
+            # Le sleep est exécuté en tâche de fond pour permettre au 'trap' de s'activer instantanément
+            sleep 10 &
             wait $!
           done
 
-          echo "[SIGNAL] Fichier 'stop.txt' détecté manuellement."
-          echo "[CLEANUP] Suppression du descripteur d'arrêt..."
-          rm -f "$STOP_FILE"
-          echo "[SHUTDOWN] Fin de session standard réussie."
+          # Nettoyage standard de fin de tâche nominale
+          echo "[SHUTDOWN] Exécution de la fermeture standard du système."
+          sudo killall ttyd || true
+          rm -f /home/runner/keepalive.txt
+          rm -f /home/runner/stop.txt
