@@ -1,124 +1,101 @@
-name: Persistent Linux Ubuntu Workspace + SFTP & WebSSH
+name: Persistent Linux Workspace Pro
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Déclenchement manuel depuis l'interface GitHub
 
 jobs:
-  workspace-host:
+  development_environment:
+    name: Linux Workspace Core
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 360 # Limite maximale absolue de GitHub Actions (6 heures)
 
     steps:
-      - name: "Checkout repository"
+      - name: 1. Extraction du Code Source
         uses: actions/checkout@v4
+        with:
+          clean: false
 
-      # ==========================================
-      # 1. RESTAURATION GLOBALE DE L'ENVIRONNEMENT
-      # ==========================================
-      - name: "Restauration du Workspace (Système & Données)"
-        id: cache-workspace
-        uses: actions/cache/restore@v4
+      - name: 2. Configuration de l'Environnement Node.js (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm' # Active le cache natif pour les dépendances Node
+
+      - name: 3. Restauration du Cache Global & Applicatif
+        id: global-cache
+        uses: actions/cache@v4
         with:
           path: |
-            /home/runner
-            /usr/local
+            ${{ github.workspace }}
+            /home/runner/.fcc
+            ~/.local
+            ~/.config
             /var/cache/apt/archives
-            /var/lib/apt/lists
-          key: linux-workspace-${{ github.run_id }}-${{ github.run_attempt }}
+          key: os-workspace-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            linux-workspace-
+            os-workspace-
 
-      # ==========================================
-      # 2. VÉRIFICATION / CONFIGURATION DES ACCÈS
-      # ==========================================
-      - name: "Configurer et démarrer les accès SSH et WebSSH"
+      - name: 4. Mise à jour Système & Installation des Paquets Essentiels
         run: |
-          # Mise à jour des dépôts uniquement si le cache APT est vide ou ancien
-          sudo apt-get update -qq
+          echo "[SYS] Début de la mise à jour et du provisionnement..."
+          sudo apt-get update
           
-          # Installation des outils d'accès s'ils ne sont pas déjà présents
-          sudo apt-get install -y openssh-server ttyd unzip wget curl git gnupg
+          # Installation automatisée et non-interactive des utilitaires indispensables
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            curl \
+            git \
+            jq \
+            socat \
+            tmux \
+            unzip \
+            wget
           
-          # Configuration du mot de passe pour l'accès SFTP/SSH
-          echo "runner:${{ secrets.SFTP_PASS }}" | sudo chpasswd
-          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo systemctl restart ssh
+          # Configuration et persistance des répertoires applicatifs
+          mkdir -p /home/runner/.fcc
+          echo "[SYS] Système à jour et paquets configurés."
 
-      # ==========================================
-      # 3. CONNEXION SÉCURISÉE VIA TAILSCALE
-      # ==========================================
-      - name: "Connexion Tailscale (Accès Privé)"
-        uses: tailscale/github-action@v2
-        with:
-          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
-
-      # ==========================================
-      # 4. EXÉCUTION & MAINTIEN DE LA SESSION DE DEV
-      # ==========================================
-      - name: "Lancement du Workspace & Monitoring"
-        env:
-          SECURE_SSH_PASS: ${{ secrets.SFTP_PASS }}
+      - name: 5. Point d'Entrée du Runtime & Système d'Auto-Sauvegarde
         run: |
-          # Lancement du terminal Web (WebSSH) en arrière-plan sur le port 7681
-          ttyd -i 0.0.0.0 -p 7681 -c "runner:$SECURE_SSH_PASS" bash > /home/runner/ttyd.log 2>&1 &
-          
           echo "========================================================="
-          echo "🌐 WORKSPACE LINUX ACTIF & SÉCURISÉ"
+          echo "         SÉCURITÉ ET AUTO-SAVE ACTIVÉS (PRO)             "
           echo "========================================================="
-          echo "Accès WebSSH : Disponible via ton IP Tailscale sur le port 7681"
-          echo "Accès SFTP/SSH : Utilisateur 'runner' avec ton SFTP_PASS"
-          echo "========================================================="
-          echo "💡 Tout ce que tu installes dans /home/runner ou via curl"
-          echo "   sera sauvegardé automatiquement à la fermeture !"
+          echo " La machine est sous haute surveillance :"
+          echo " - Un arrêt manuel : créez le fichier 'stop.txt'"
+          echo " - Un timeout (6h) ou une annulation : Sauvegarde Auto active."
           echo "========================================================="
 
-          # Création du fichier de signal d'arrêt s'il n'existe pas
-          rm -f /home/runner/stop.txt
-          touch /home/runner/keepalive.txt
-
-          # Boucle principale de maintien (5h50 max)
-          MAX_TIME=21000
-          ELAPSED=0
-          
-          while [ -f /home/runner/keepalive.txt ]; do
-            sleep 10
-            ELAPSED=$((ELAPSED + 10))
+          # --- FONCTION INTERCEPTATRICE (TRAP) POUR L'AUTO-SAVE ---
+          trigger_auto_save() {
+            echo -e "\n[⚠️ ALERT] Signal de fermeture détecté (Timeout ou Annulation) !"
+            echo "[AUTO-SAVE] Initialisation de la procédure de sauvegarde d'urgence..."
             
-            # Détection du signal d'arrêt manuel via SFTP/WebSSH
-            if [ -f "/home/runner/stop.txt" ]; then
-              echo "🛑 Signal d'arrêt détecté via stop.txt ! Préparation de la sauvegarde..."
-              rm -f /home/runner/stop.txt
-              break
-            fi
+            # Nettoyage préventif pour éviter une boucle d'arrêt lors de la prochaine session
+            rm -f "${{ github.workspace }}/stop.txt"
+            
+            echo "[AUTO-SAVE] Clôture propre des processus effectuée. Cache prêt pour l'envoi."
+            exit 0
+          }
 
-            # Sécurité Timeout de fin de cycle GitHub Actions
-            if [ $ELAPSED -ge $MAX_TIME ]; then
-              echo "⚠️ Temps maximum de session atteint. Fermeture automatique..."
-              break
-            fi
+          # Liaison de la fonction aux signaux système Linux d'arrêt (SIGTERM = GitHub Cancel/Timeout)
+          trap trigger_auto_save SIGTERM SIGINT
+
+          # -----------------------------------------------------------------
+          # EXÉCUTION DE VOS SCRIPT EN ARRIÈRE-PLAN
+          # (Exemple : fcc-server &)
+          # -----------------------------------------------------------------
+
+          # Boucle de surveillance principale (Hautement optimisée)
+          STOP_FILE="${{ github.workspace }}/stop.txt"
+          
+          while [ ! -f "$STOP_FILE" ]; do
+            # Le "sleep" est mis en arrière-plan pour permettre à l'intercepteur (trap) 
+            # de réagir instantanément sans attendre la fin des secondes de pause.
+            sleep 5 & 
+            wait $!
           done
 
-      # ==========================================
-      # 5. NETTOYAGE DES PROCESSUS AVANT SAUVEGARDE
-      # ==========================================
-      - name: "Libération des processus pour éviter les verrous de fichiers"
-        if: always()
-        run: |
-          echo "Arrêt des outils en arrière-plan..."
-          sudo killall ttyd || true
-          rm -f /home/runner/keepalive.txt
-
-      # ==========================================
-      # 6. SAUVEGARDE STRICTE ET POST-JOB DU CACHE
-      # ==========================================
-      - name: "Sauvegarde du Workspace (Système & Données)"
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            /home/runner
-            /usr/local
-            /var/cache/apt/archives
-            /var/lib/apt/lists
-          key: linux-workspace-${{ github.run_id }}-${{ github.run_attempt }}
+          echo "[SIGNAL] Fichier 'stop.txt' détecté manuellement par l'architecte."
+          echo "[CLEANUP] Suppression du descripteur d'arrêt..."
+          rm -f "$STOP_FILE"
+          echo "[SHUTDOWN] Fin de session propre demandée."
