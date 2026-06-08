@@ -1,7 +1,11 @@
 name: Persistent Linux Workspace Pro
 
 on:
-  workflow_dispatch: # Déclenchement manuel depuis l'interface GitHub
+  workflow_dispatch: # Déclenchement manuel contrôlé
+
+# Forçage global de l'environnement pour anticiper les dépréciations de la plateforme
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   development_environment:
@@ -15,11 +19,11 @@ jobs:
         with:
           clean: false
 
-      - name: 2. Configuration de l'Environnement Node.js (LTS)
+      - name: 2. Configuration de l'Environnement Node.js (Version Active & Future)
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm' # Active le cache natif pour les dépendances Node
+          node-version: 22 # Passage à la version LTS supérieure pour éviter la dépréciation
+          # CORRECTION CLÉ : Retrait de l'option cache: 'npm' pour éviter le plantage si le projet est vide
 
       - name: 3. Restauration du Cache Global & Applicatif
         id: global-cache
@@ -35,13 +39,16 @@ jobs:
           restore-keys: |
             os-workspace-
 
-      - name: 4. Mise à jour Système & Installation des Paquets Essentiels
+      - name: 4. Mise à jour Système & Installation Sécurisée des Paquets Essentiels
         run: |
-          echo "[SYS] Début de la mise à jour et du provisionnement..."
-          sudo apt-get update
+          echo "[SYS] Début de la mise à jour des dépôts..."
           
-          # Installation automatisée et non-interactive des utilitaires indispensables
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          # Tentative de mise à jour avec tolérance aux erreurs réseau passagères
+          sudo apt-get update || true
+          
+          echo "[SYS] Installation non-interactive des utilitaires essentiels..."
+          # Utilisation d'options strictes pour éviter tout blocage ou invite interactive
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential \
             curl \
             git \
@@ -49,53 +56,52 @@ jobs:
             socat \
             tmux \
             unzip \
-            wget
+            wget || echo "[WARN] Certains paquets n'ont pas pu être installés, poursuite du workflow."
           
-          # Configuration et persistance des répertoires applicatifs
+          # Sécurisation et persistance des répertoires applicatifs
           mkdir -p /home/runner/.fcc
-          echo "[SYS] Système à jour et paquets configurés."
+          echo "[SYS] Environnement système initialisé."
 
       - name: 5. Point d'Entrée du Runtime & Système d'Auto-Sauvegarde
         run: |
           echo "========================================================="
           echo "         SÉCURITÉ ET AUTO-SAVE ACTIVÉS (PRO)             "
           echo "========================================================="
-          echo " La machine est sous haute surveillance :"
-          echo " - Un arrêt manuel : créez le fichier 'stop.txt'"
-          echo " - Un timeout (6h) ou une annulation : Sauvegarde Auto active."
+          echo " Surveillance active de l'instance :"
+          echo " - Arrêt propre manuel : créez le fichier 'stop.txt'"
+          echo " - Timeout ou Annulation : Interception et Auto-Save"
           echo "========================================================="
 
-          # --- FONCTION INTERCEPTATRICE (TRAP) POUR L'AUTO-SAVE ---
+          # --- ROUTINE D'INTERCEPTION (TRAP) POUR L'AUTO-SAVE ---
           trigger_auto_save() {
-            echo -e "\n[⚠️ ALERT] Signal de fermeture détecté (Timeout ou Annulation) !"
-            echo "[AUTO-SAVE] Initialisation de la procédure de sauvegarde d'urgence..."
+            echo -e "\n[⚠️ ALERT] Signal système de fermeture intercepté (Timeout ou Annulation) !"
+            echo "[AUTO-SAVE] Lancement de la procédure de sauvegarde d'urgence..."
             
-            # Nettoyage préventif pour éviter une boucle d'arrêt lors de la prochaine session
+            # Nettoyage préventif du fichier d'arrêt pour la session suivante
             rm -f "${{ github.workspace }}/stop.txt"
             
-            echo "[AUTO-SAVE] Clôture propre des processus effectuée. Cache prêt pour l'envoi."
+            echo "[AUTO-SAVE] Nettoyage terminé. Transfert des données vers le gestionnaire de cache..."
             exit 0
           }
 
-          # Liaison de la fonction aux signaux système Linux d'arrêt (SIGTERM = GitHub Cancel/Timeout)
+          # Liaison de la fonction aux signaux d'arrêt de GitHub (SIGTERM / SIGINT)
           trap trigger_auto_save SIGTERM SIGINT
 
           # -----------------------------------------------------------------
-          # EXÉCUTION DE VOS SCRIPT EN ARRIÈRE-PLAN
+          # ZONE D'INJECTION DE VOS PROCESSUS EN ARRIÈRE-PLAN
           # (Exemple : fcc-server &)
           # -----------------------------------------------------------------
 
-          # Boucle de surveillance principale (Hautement optimisée)
           STOP_FILE="${{ github.workspace }}/stop.txt"
           
+          # Boucle de surveillance à haute performance et basse consommation CPU
           while [ ! -f "$STOP_FILE" ]; do
-            # Le "sleep" est mis en arrière-plan pour permettre à l'intercepteur (trap) 
-            # de réagir instantanément sans attendre la fin des secondes de pause.
+            # Exécution du sleep en arrière-plan pour que le shell reste à l'écoute des signaux 'trap'
             sleep 5 & 
             wait $!
           done
 
-          echo "[SIGNAL] Fichier 'stop.txt' détecté manuellement par l'architecte."
+          echo "[SIGNAL] Fichier 'stop.txt' détecté manuellement."
           echo "[CLEANUP] Suppression du descripteur d'arrêt..."
           rm -f "$STOP_FILE"
-          echo "[SHUTDOWN] Fin de session propre demandée."
+          echo "[SHUTDOWN] Fin de session standard réussie."
