@@ -3,32 +3,30 @@ name: Persistent Linux Ubuntu Workspace + SFTP & WebSSH Pro
 on:
   workflow_dispatch: # Déclenchement manuel unifié depuis l'interface GitHub
 
-# Anticipation des règles de dépréciation de GitHub pour sécuriser l'environnement en 2026
+# Fixation globale de l'environnement pour anticiper les politiques de dépréciation de GitHub (Obligatoire en 2026)
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   workspace-host:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # Augmenté à la limite maximale autorisée (6 heures)
+    timeout-minutes: 360 # Augmenté à la limite maximale autorisée par GitHub (6 heures)
 
     steps:
       - name: "1. Checkout repository"
         uses: actions/checkout@v4
         with:
-          clean: false # Préserve les modifications locales entre les sessions
+          clean: false # Préserve les modifications locales et fichiers non suivis entre les sessions
 
       - name: "2. Configuration Runtime Node.js"
         uses: actions/setup-node@v4
         with:
-          node-version: 22 # Version stable LTS sans option 'cache' pour éviter le crash si le dépôt est vide
+          node-version: 22 # Version stable LTS sans option 'cache' bloquante si le dépôt est vide
 
       - name: "3. Restauration Unifiée et Automatique du Workspace"
         id: cache-workspace
         uses: actions/cache@v4
         with:
-          # Inclusions de tes dossiers de données essentiels.
-          # NOTE : Si ton cache sature à cause de /usr/local, retire cette ligne spécifique du tableau.
           path: |
             /home/runner
             /usr/local
@@ -43,7 +41,7 @@ jobs:
           echo "[SYS] Mise à jour des miroirs APT..."
           sudo apt-get update -qq || true
           
-          echo "[SYS] Installation des couches d'accès et outils de build..."
+          echo "[SYS] Installation des couches d'accès et outils de build essentiels..."
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             openssh-server \
             ttyd \
@@ -57,14 +55,13 @@ jobs:
             socat \
             tmux || echo "[WARN] Certains paquets système secondaires n'ont pas pu être mis à jour."
           
-          echo "[SYS] Configuration de la sécurité d'accès distant..."
-          # Synchronisation du mot de passe avec tes secrets de dépôt pour l'utilisateur runner
+          echo "[SYS] Configuration de la sécurité d'accès distant SSH/SFTP..."
           echo "runner:${{ secrets.SFTP_PASS }}" | sudo chpasswd
           sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
           
-          # Assure la présence structurelle du dossier de configuration pour tes outils AI
+          # Initialisation de la structure d'accueil pour tes outils d'IA (Free Claude Code)
           mkdir -p /home/runner/.fcc
 
       - name: "5. Connexion Sécurisée au Réseau Privé Tailscale"
@@ -90,37 +87,46 @@ jobs:
           echo " -> Fermeture forcée (GitHub Cancel) : Auto-Save géré par Signal Trap"
           echo "========================================================="
 
-          # Configuration des drapeaux de session
+          # Initialisation des drapeaux de session
           rm -f /home/runner/stop.txt
           touch /home/runner/keepalive.txt
 
-          # --- TOKENS D'INTERCEPTION ET D'ARRÊT PROPRE (TRAP) ---
+          # --- ROUTINE CRITIQUE : INTERCEPTION (TRAP) ET FIX DES PERMISSIONS ---
           trigger_auto_save() {
             echo -e "\n[⚠️ ALERT] Signal d'arrêt ou d'annulation détecté par l'infrastructure GitHub !"
             echo "[AUTO-SAVE] Libération des verrous de processus et destruction de ttyd..."
             sudo killall ttyd || true
             rm -f /home/runner/stop.txt
             rm -f /home/runner/keepalive.txt
-            echo "[AUTO-SAVE] Environnement nettoyé et synchronisé. Envoi imminent de l'archive d'état."
+            
+            echo "[AUTO-SAVE] Application du correctif de permissions sur les dossiers système d'APT..."
+            # Permet à l'action d'upload du cache de lire /var/cache/apt/archives et /var/lib/apt/lists sans erreur de droit
+            sudo chown -R runner:runner /var/cache/apt/archives /var/lib/apt/lists || true
+            
+            echo "[AUTO-SAVE] Environnement paré pour la sauvegarde d'état. Envoi imminent de l'archive."
             exit 0
           }
           
-          # Enregistrement du piège à signaux (SIGTERM s'active lors du clic sur 'Cancel Run' ou Timeout)
+          # Liaison du piège aux signaux de fermeture brutale (clic sur 'Cancel Run' ou Timeout de 6h)
           trap trigger_auto_save SIGTERM SIGINT
 
-          # Boucle de surveillance à haute performance énergétique (Pas de surcharge CPU)
+          # Boucle principale de maintien de session (Haute performance, 0% CPU)
           while [ -f /home/runner/keepalive.txt ]; do
             if [ -f "/home/runner/stop.txt" ]; then
               echo "🛑 Signal d'arrêt manuel détecté depuis l'espace de travail."
               break
             fi
-            # Le sleep est exécuté en tâche de fond pour permettre au 'trap' de s'activer instantanément
+            # Le sleep est envoyé en arrière-plan pour garder le shell réactif aux signaux système (trap)
             sleep 10 &
             wait $!
           done
 
-          # Nettoyage standard de fin de tâche nominale
+          # --- PROCÉDURE DE FERMETURE NOMINALE ACCÉLÉRÉE ---
           echo "[SHUTDOWN] Exécution de la fermeture standard du système."
           sudo killall ttyd || true
           rm -f /home/runner/keepalive.txt
           rm -f /home/runner/stop.txt
+          
+          echo "[SHUTDOWN] Application du correctif final de permissions pour la sauvegarde du cache..."
+          sudo chown -R runner:runner /var/cache/apt/archives /var/lib/apt/lists || true
+          echo "[SHUTDOWN] Session clôturée avec succès."
