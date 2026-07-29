@@ -1,3 +1,5 @@
+#100day javascript  by n3on
+
 name: Persistent Linux Ubuntu Workspace + SFTP & WebSSH Pro
 
 on:
@@ -31,12 +33,13 @@ jobs:
             /home/runner
             /usr/local
             /var/cache/apt/archives
-            /var/lib/apt/lists
           key: linux-workspace-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             linux-workspace-
 
       - name: "4. Configuration et Installation des Accès (SSH, SFTP & Utilitaires)"
+        env:
+          SECURE_SSH_PASS: ${{ secrets.SFTP_PASS }}
         run: |
           echo "[SYS] Mise à jour des miroirs APT..."
           sudo apt-get update -qq || true
@@ -56,15 +59,15 @@ jobs:
             tmux || echo "[WARN] Certains paquets système secondaires n'ont pas pu être mis à jour."
           
           echo "[SYS] Configuration de la sécurité d'accès distant SSH/SFTP..."
-          echo "runner:${{ secrets.SFTP_PASS }}" | sudo chpasswd
-          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          echo "runner:$SECURE_SSH_PASS" | sudo chpasswd
+          sudo sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
           
           # Initialisation de la structure d'accueil pour tes outils d'IA (Free Claude Code)
           mkdir -p /home/runner/.fcc
 
       - name: "5. Connexion Sécurisée au Réseau Privé Tailscale"
+        id: tailscale
         uses: tailscale/github-action@v2
         with:
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
@@ -81,6 +84,10 @@ jobs:
           echo "========================================================="
           echo "Accès WebSSH  : Disponible via ton IP Tailscale sur le port 7681"
           echo "Accès SFTP/SSH : Connecte ton VS Code sur l'IP Tailscale (User: runner)"
+
+          # Tentative de récupération de l'IP Tailscale pour un affichage direct
+          TS_IP=$(tailscale ip -4 || echo "Inconnue")
+          echo "IP Tailscale détectée : $TS_IP"
           echo "========================================================="
           echo " Failsafes opérationnels :"
           echo " -> Arrêt contrôlé (SFTP/WebSSH) : Crée le fichier 'stop.txt'"
@@ -100,8 +107,8 @@ jobs:
             rm -f /home/runner/keepalive.txt
             
             echo "[AUTO-SAVE] Application du correctif de permissions sur les dossiers système d'APT..."
-            # Permet à l'action d'upload du cache de lire /var/cache/apt/archives et /var/lib/apt/lists sans erreur de droit
-            sudo chown -R runner:runner /var/cache/apt/archives /var/lib/apt/lists || true
+            # Permet à l'action d'upload du cache de lire /var/cache/apt/archives sans erreur de droit
+            sudo chown -R runner:runner /var/cache/apt/archives || true
             
             echo "[AUTO-SAVE] Environnement paré pour la sauvegarde d'état. Envoi imminent de l'archive."
             exit 0
@@ -128,5 +135,5 @@ jobs:
           rm -f /home/runner/stop.txt
           
           echo "[SHUTDOWN] Application du correctif final de permissions pour la sauvegarde du cache..."
-          sudo chown -R runner:runner /var/cache/apt/archives /var/lib/apt/lists || true
+          sudo chown -R runner:runner /var/cache/apt/archives || true
           echo "[SHUTDOWN] Session clôturée avec succès."
